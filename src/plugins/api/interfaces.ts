@@ -205,6 +205,48 @@ export enum MediaType {
   UNKNOWN = "unknown",
 }
 
+export type LibrarySortMediaType =
+  | MediaType.ARTIST
+  | MediaType.ALBUM
+  | MediaType.TRACK
+  | MediaType.PLAYLIST
+  | MediaType.RADIO
+  | MediaType.AUDIOBOOK
+  | MediaType.PODCAST
+  | MediaType.GENRE;
+
+export enum SortField {
+  NAME = "name",
+  SORT_NAME = "sort_name",
+  TIMESTAMP_ADDED = "timestamp_added",
+  TIMESTAMP_MODIFIED = "timestamp_modified",
+  LAST_PLAYED = "last_played",
+  PLAY_COUNT = "play_count",
+  DURATION = "duration",
+  YEAR = "year",
+  POSITION = "position",
+  ARTIST_NAME = "artist_name",
+  RANDOM = "random",
+  RANDOM_PLAY_COUNT = "random_play_count",
+  TRACK_NUMBER = "track_number",
+  ALBUM_NAME = "album_name",
+  PROVIDER = "provider",
+  FAVORITE_TIMESTAMP = "favorite_timestamp",
+  ORIGINAL = "original",
+}
+
+export enum SortDirection {
+  ASC = "asc",
+  DESC = "desc",
+}
+
+export interface SortOptionInfo {
+  field: SortField;
+  supports_direction: boolean;
+  default_direction: SortDirection | null;
+  label_key: string | null;
+}
+
 export enum LinkType {
   WEBSITE = "website",
   FACEBOOK = "facebook",
@@ -553,6 +595,8 @@ export enum VolumeNormalizationMode {
 export enum CrossfadeMode {
   SMART_CROSSFADE = "smart_crossfade",
   STANDARD_CROSSFADE = "standard_crossfade",
+  // a spoken tail mixed over the next track's start, with the track ducked under it
+  VOICE_OVER = "voice_over",
   DISABLED = "disabled",
   // the source crossfades its own playback, so the server does not
   SOURCE = "source",
@@ -666,10 +710,11 @@ export interface ServerInfoMessage {
   onboard_done: boolean;
   name: string | null;
   status: CoreState;
-  // internal_url supersedes base_url; older servers only send base_url
+  // internal_url supersedes base_url
   internal_url: string | null;
   external_url: string | null;
   has_remote_access: boolean;
+  unsupported_install: boolean;
 }
 
 export type MessageType =
@@ -956,8 +1001,7 @@ export interface MediaItemImage {
   provider: string;
   remotely_accessible: boolean;
   // Opaque sha256(provider+path) id used to address the image via the
-  // canonical /imageproxy/<proxy_id> endpoint. Injected by the server on
-  // schema_version >= 31; null when it issues no id, absent on older servers.
+  // canonical /imageproxy/<proxy_id> endpoint; null when the server issues no id.
   proxy_id?: string | null;
 }
 
@@ -1097,6 +1141,9 @@ export enum PlaylistMatchPolicy {
 
 export interface Radio extends MediaItem {
   is_dynamic: boolean;
+  // false: the station is finite (an AI Radio show) and the queue plays it out and
+  // ends, instead of streaming or refilling forever
+  is_endless?: boolean;
 }
 
 export interface SoundEffect extends MediaItem {
@@ -1129,6 +1176,9 @@ export interface PodcastEpisode extends MediaItem {
   position: number;
   podcast: Podcast | ItemMapping;
   duration: number;
+  // the publisher's own episode and season number, null when it does not number them
+  episode_number: number | null;
+  season: number | null;
   fully_played: boolean | null;
   resume_position_ms: number | null;
 }
@@ -1573,8 +1623,8 @@ export interface Player {
 
   // active_source_audio: audio-path snapshot for a live external source (e.g.
   // Spotify Connect) playing on active_source; null while a queue item is
-  // playing instead, or while nothing is known yet. Absent on older servers.
-  active_source_audio?: ActiveSourceAudioDetails | null;
+  // playing instead, or while nothing is known yet.
+  active_source_audio: ActiveSourceAudioDetails | null;
 }
 
 // provider
@@ -1605,9 +1655,8 @@ export interface ProviderManifest {
   // has_setup_flow: whether setup can be run again to reconfigure the provider
   has_setup_flow: boolean;
   // self_service: whether a member may set up (and reconfigure) a music source of
-  // this provider itself, instead of only a user who manages every music source;
-  // an older server does not send it and lets a member set up any provider
-  self_service?: boolean;
+  // this provider itself, instead of only a user who manages every music source
+  self_service: boolean;
   stage: ProviderStage;
   // icon: material design icon
   icon: string | null;
@@ -1976,6 +2025,15 @@ export interface StorageInfo {
   can_add_local_folder: boolean;
 }
 
+/** The folder a Local files source reads its music from. */
+export interface SourceFolder {
+  // absolute path inside the server process
+  path: string;
+  // innermost storage location holding the folder, as last known; null when there is
+  // none or the caller may not see it
+  location: StorageLocation | null;
+}
+
 /** The connection settings of a network share, as the add and update commands take them. */
 export interface NetworkShareSettings {
   server: string;
@@ -2012,6 +2070,7 @@ export interface PartyConfig {
   qr_text: string | null;
   hide_back_button: boolean;
   show_progress_bar: boolean;
+  prevent_duplicate_tracks: boolean;
   // Shared-audio experience for guests: "venue" (opt-in) or "remote" (silent disco).
   mode?: "venue" | "remote";
 }
@@ -2072,6 +2131,8 @@ export interface AIRadioSection {
   web_search?: AIRadioWebSearchMode;
   constraints?: AIRadioSectionConstraints;
   cover_image?: string;
+  /** Whether this segment may carry over the next track's intro. */
+  allow_post?: boolean;
 }
 
 export interface AIRadioOptionalGuards {
@@ -2140,29 +2201,18 @@ export interface AIRadioStation {
   host_id: string;
 }
 
-export interface AIRadioSession {
-  session_id: string;
-  station_id: string;
-  queue_id: string | null;
-  status: "running" | "completed" | "failed" | "stopped";
-  created_at: string;
-  started_at: string | null;
-  ended_at: string | null;
-  error: string | null;
-  skipped_sections?: number;
-  last_render_error: string | null;
-  progress?: {
-    phase?: string;
-    [key: string]: unknown;
-  };
-  result?: {
-    queue_entries?: number;
-    planned_sections?: number;
-    skipped_sections?: number;
-    [key: string]: unknown;
-  };
-}
+/**
+ * Per-queue AI DJ state. `station_id` is "" for a manually armed DJ and the
+ * show's id when the DJ was auto-armed by playing that show (i.e. it's on air).
+ */
+export type AIRadioQueueDJStatus = Record<
+  string,
+  { host_id: string; station_id: string }
+>;
 
-export interface AIRadioStatus {
-  sessions: AIRadioSession[];
-}
+/** Refetch hints the ai_radio plugin broadcasts as PROVIDER_EVENT payloads; they carry no state. */
+export type AIRadioEventName =
+  | "hosts_updated"
+  | "stations_updated"
+  | "sections_updated"
+  | "queue_dj_updated";

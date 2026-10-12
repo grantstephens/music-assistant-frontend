@@ -19,6 +19,8 @@ vi.mock("@/plugins/api", () => ({
   default: {
     players: {},
     sendCommand,
+    subscribe: vi.fn(() => () => {}),
+    state: { value: "initialized" },
   },
 }));
 
@@ -84,7 +86,8 @@ const host: AIRadioHost = {
 
 sendCommand.mockImplementation(async (command: string) => {
   if (command === "ai_radio/hosts/list") return [host];
-  if (command === "ai_radio/queue_dj/status") return { kitchen: "host-1" };
+  if (command === "ai_radio/queue_dj/status")
+    return { kitchen: { host_id: "host-1", station_id: "" } };
   return undefined;
 });
 
@@ -115,7 +118,11 @@ describe("useHosts queue dj prefetch", () => {
     await flushPromises();
 
     expect(sendCommand).toHaveBeenCalledWith("ai_radio/hosts/list");
-    expect(sendCommand).toHaveBeenCalledWith("ai_radio/queue_dj/status");
+    expect(sendCommand).toHaveBeenCalledWith(
+      "ai_radio/queue_dj/status",
+      undefined,
+      { suppressGlobalError: true },
+    );
 
     // First build of the menu after page load, i.e. the one that used to show
     // an empty host list with a wrongly checked "Off".
@@ -130,8 +137,5 @@ describe("useHosts queue dj prefetch", () => {
     expect(
       aiDj?.subItems?.find((item) => item.label === "ai_dj_off")?.selected,
     ).toBe(false);
-
-    // Let the menu's own refresh calls settle before the test ends.
-    await flushPromises();
   });
 });
